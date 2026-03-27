@@ -83,43 +83,105 @@ const estudianteService = {
   },
 
   // Carga masiva de estudiantes
-bulkCreate: async (estudiantes) => {
-  const results = {
-    exitosos: [],
-    fallidos: [],
-    total: estudiantes.length,
-    tipo: 'estudiantes' // ✅ AGREGAR ESTO
-  };
+  bulkCreate: async (estudiantes) => {
+    const results = {
+      exitosos: [],
+      fallidos: [],
+      total: estudiantes.length,
+      tipo: 'estudiantes'
+    };
 
-  for (let i = 0; i < estudiantes.length; i++) {
+    for (let i = 0; i < estudiantes.length; i++) {
+      try {
+        const matricula = await estudianteService.generarMatricula();
+        const estudianteData = {
+          ...estudiantes[i],
+          matricula: matricula
+        };
+        
+        const creado = await estudianteService.create(estudianteData);
+        
+        results.exitosos.push({
+          fila: i + 2,
+          matricula: creado.matricula,
+          nombres: creado.nombres,
+          apellidos: creado.apellidos,
+          gradoActual: creado.gradoActual
+        });
+      } catch (error) {
+        results.fallidos.push({
+          fila: i + 2,
+          datos: estudiantes[i],
+          error: error.response?.data?.message || error.message || 'Error desconocido'
+        });
+      }
+    }
+
+    return results;
+  },
+
+  // ============================================================
+  // ASIGNACIÓN MASIVA A AULA - NUEVO MÉTODO OPTIMIZADO
+  // ============================================================
+  bulkAssignToAula: async (aulaId, estudianteIds) => {
     try {
-      const matricula = await estudianteService.generarMatricula();
-      const estudianteData = {
-        ...estudiantes[i],
-        matricula: matricula
+      const response = await axiosInstance.post(`${API_URL}/bulk-assign-to-aula`, {
+        aulaId,
+        estudianteIds
+      });
+      
+      // El backend devuelve ResultadoOperacionMasivaDto
+      // Transformar al formato esperado por el frontend
+      return {
+        exitosos: response.data.exitosos.map(id => ({
+          id,
+          mensaje: 'Asignado exitosamente'
+        })),
+        fallidos: response.data.fallidos.map(error => ({
+          id: error.id,
+          error: error.error
+        })),
+        total: response.data.totalProcesados
       };
-      
-      const creado = await estudianteService.create(estudianteData);
-      
-      results.exitosos.push({
-        fila: i + 2,
-        matricula: creado.matricula,
-        nombres: creado.nombres,
-        apellidos: creado.apellidos,
-        gradoActual: creado.gradoActual
-      });
     } catch (error) {
-      results.fallidos.push({
-        fila: i + 2,
-        datos: estudiantes[i],
-        error: error.response?.data?.message || error.message || 'Error desconocido'
-      });
+      console.error('Error en asignación masiva:', error);
+      throw new Error(
+        error.response?.data?.message || 
+        'Error al asignar estudiantes al aula'
+      );
+    }
+  },
+
+  // ============================================================
+  // DESASIGNACIÓN MASIVA DE AULA - NUEVO MÉTODO OPTIMIZADO
+  // ============================================================
+  bulkUnassignFromAula: async (estudianteIds) => {
+    try {
+      const response = await axiosInstance.post(`${API_URL}/bulk-unassign-from-aula`, 
+        estudianteIds
+      );
+      
+      // El backend devuelve ResultadoOperacionMasivaDto
+      // Transformar al formato esperado por el frontend
+      return {
+        exitosos: response.data.exitosos.map(id => ({
+          id,
+          mensaje: 'Desasignado exitosamente'
+        })),
+        fallidos: response.data.fallidos.map(error => ({
+          id: error.id,
+          error: error.error
+        })),
+        total: response.data.totalProcesados
+      };
+    } catch (error) {
+      console.error('Error en desasignación masiva:', error);
+      throw new Error(
+        error.response?.data?.message || 
+        'Error al desasignar estudiantes del aula'
+      );
     }
   }
-
-  return results;
-}
 };
 
 export default estudianteService;
-

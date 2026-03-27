@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { theme } from "../../styles";
 import estudianteService from "../../services/estudianteService";
 import aulaService from "../../services/aulaService";
@@ -7,13 +7,16 @@ import { useCrud } from "../../hooks/useCrud";
 import { useFormValidation } from "../../hooks/useFormValidation";
 import { useModal } from "../../hooks/useModal";
 import { MySwal, Toast } from "../../utils/alerts";
-import { Upload, FileSpreadsheet } from "lucide-react";
+import { Upload, FileSpreadsheet, UserPlus, UserMinus } from "lucide-react";
 import { useExcelUpload } from "../../hooks/useExcelUpload";
 import BulkUploadResultModal from "../../components/molecules/BulkUploadResultModal/BulkUploadResultModal";
+import BulkAssignToAulaModal from "../../components/molecules/BulkAssignToAulaModal/BulkAssignToAulaModal";
+import BulkUnassignFromAulaModal from "../../components/molecules/BulkUnassignFromAulaModal/BulkUnassignFromAulaModal";
 import {
   studentsColumns,
   studentsSearchFields,
   getStudentsFormFields,
+  getStudentsFilterOptions,
   studentsValidationRules,
   getInitialStudentFormData,
   formatStudentForForm,
@@ -52,9 +55,16 @@ export default function Students() {
   const [aulas, setAulas] = useState([]);
   const [aulasLoading, setAulasLoading] = useState(false);
 
+  // Estados para carga masiva de Excel
   const [showResultsModal, setShowResultsModal] = useState(false);
   const [uploadResults, setUploadResults] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Estados para asignación masiva a aula
+  const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
+  
+  // Estados para desasignación masiva de aula
+  const [showBulkUnassignModal, setShowBulkUnassignModal] = useState(false);
 
   const {
     isProcessing,
@@ -79,7 +89,7 @@ export default function Students() {
 
   const totalEstudiantes = estudiantes.length;
   const estudiantesActivos = estudiantes.filter((e) => e.activo).length;
-  const estudiantesInactivos = totalEstudiantes - estudiantesActivos;
+  const estudiantesConAula = estudiantes.filter((e) => e.activo && e.aulaId).length;
   const totalTutores = estudiantes.filter((e) => !!e.nombreTutor).length;
 
   const stats = [
@@ -96,10 +106,10 @@ export default function Students() {
       icon: <UserCheck size={28} />,
     },
     {
-      label: "Inactivos",
-      value: estudiantesInactivos,
-      color: theme.colors.error,
-      icon: <UserX size={28} />,
+      label: "Con Aula Asignada",
+      value: estudiantesConAula,
+      color: "#3B82F6",
+      icon: <GraduationCap size={28} />,
     },
     {
       label: "Con Tutor Registrado",
@@ -108,6 +118,11 @@ export default function Students() {
       icon: <GraduationCap size={28} />,
     },
   ];
+
+  // ✅ Memoizar filterOptions para evitar recalcular en cada render
+  const filterOptions = useMemo(() => {
+    return getStudentsFilterOptions(estudiantes);
+  }, [estudiantes]);
 
   const getAulasOptions = () => {
     const base = [{ value: "", label: "Sin asignar - Asignar después" }];
@@ -295,6 +310,10 @@ export default function Students() {
     }
   };
 
+  // ============================================================
+  // CARGA MASIVA DESDE EXCEL - HANDLERS
+  // ============================================================
+
   const handleDownloadTemplate = () => {
     generateExcelTemplate();
     Toast.fire({
@@ -419,6 +438,134 @@ export default function Students() {
     fileInputRef.current?.click();
   };
 
+  // ============================================================
+  // ASIGNACIÓN MASIVA A AULA - HANDLERS
+  // ============================================================
+
+  const handleOpenBulkAssign = () => {
+    setShowBulkAssignModal(true);
+  };
+
+  const handleBulkAssignToAula = async (aulaId, estudianteIds) => {
+    try {
+      MySwal.fire({
+        title: "Asignando estudiantes...",
+        text: `Procesando ${estudianteIds.length} estudiantes. Esto puede tomar unos momentos.`,
+        didOpen: () => MySwal.showLoading(),
+        allowOutsideClick: false,
+      });
+
+      const results = await estudianteService.bulkAssignToAula(aulaId, estudianteIds);
+
+      MySwal.close();
+
+      if (results.fallidos.length === 0) {
+        Toast.fire({
+          icon: "success",
+          title: `${results.exitosos.length} estudiantes asignados correctamente`,
+        });
+      } else {
+        await MySwal.fire({
+          title: "Asignación completada con errores",
+          html: `
+            <div style="text-align: left;">
+              <p><strong>${results.exitosos.length}</strong> estudiantes asignados exitosamente</p>
+              <p><strong>${results.fallidos.length}</strong> estudiantes fallaron:</p>
+              <ul style="max-height: 200px; overflow-y: auto; text-align: left;">
+                ${results.fallidos
+                  .slice(0, 5)
+                  .map((f) => `<li>ID ${f.id}: ${f.error}</li>`)
+                  .join("")}
+                ${
+                  results.fallidos.length > 5
+                    ? `<li>... y ${results.fallidos.length - 5} más</li>`
+                    : ""
+                }
+              </ul>
+            </div>
+          `,
+          icon: "warning",
+          confirmButtonText: "Entendido",
+        });
+      }
+
+      await fetchAll();
+      setShowBulkAssignModal(false);
+    } catch (error) {
+      console.error("Error en asignación masiva:", error);
+      MySwal.close();
+      Toast.fire({
+        icon: "error",
+        title: "Error en la asignación masiva",
+        text: error.message || "Ocurrió un error inesperado",
+      });
+    }
+  };
+
+  // ============================================================
+  // DESASIGNACIÓN MASIVA DE AULA - HANDLERS
+  // ============================================================
+
+  const handleOpenBulkUnassign = () => {
+    setShowBulkUnassignModal(true);
+  };
+
+  const handleBulkUnassignFromAula = async (estudianteIds) => {
+    try {
+      MySwal.fire({
+        title: "Desasignando estudiantes...",
+        text: `Procesando ${estudianteIds.length} estudiantes. Esto puede tomar unos momentos.`,
+        didOpen: () => MySwal.showLoading(),
+        allowOutsideClick: false,
+      });
+
+      const results = await estudianteService.bulkUnassignFromAula(estudianteIds);
+
+      MySwal.close();
+
+      if (results.fallidos.length === 0) {
+        Toast.fire({
+          icon: "success",
+          title: `${results.exitosos.length} estudiantes desasignados correctamente`,
+        });
+      } else {
+        await MySwal.fire({
+          title: "Desasignación completada con errores",
+          html: `
+            <div style="text-align: left;">
+              <p><strong>${results.exitosos.length}</strong> estudiantes desasignados exitosamente</p>
+              <p><strong>${results.fallidos.length}</strong> estudiantes fallaron:</p>
+              <ul style="max-height: 200px; overflow-y: auto; text-align: left;">
+                ${results.fallidos
+                  .slice(0, 5)
+                  .map((f) => `<li>ID ${f.id}: ${f.error}</li>`)
+                  .join("")}
+                ${
+                  results.fallidos.length > 5
+                    ? `<li>... y ${results.fallidos.length - 5} más</li>`
+                    : ""
+                }
+              </ul>
+            </div>
+          `,
+          icon: "warning",
+          confirmButtonText: "Entendido",
+        });
+      }
+
+      await fetchAll();
+      setShowBulkUnassignModal(false);
+    } catch (error) {
+      console.error("Error en desasignación masiva:", error);
+      MySwal.close();
+      Toast.fire({
+        icon: "error",
+        title: "Error en la desasignación masiva",
+        text: error.message || "Ocurrió un error inesperado",
+      });
+    }
+  };
+
   return (
     <>
       <input
@@ -441,6 +588,7 @@ export default function Students() {
         stats={stats}
         columns={studentsColumns}
         searchFields={studentsSearchFields}
+        filterOptions={filterOptions}
         isModalOpen={isModalOpen}
         modalTitle={
           selectedEstudiante ? "Editar Estudiante" : "Nuevo Estudiante"
@@ -457,6 +605,16 @@ export default function Students() {
         onInputChange={handleInputChange}
         onRetry={handleRetry}
         additionalActions={[
+          {
+            label: "Asignar a Aula",
+            icon: <UserPlus size={20} />,
+            onClick: handleOpenBulkAssign,
+          },
+          {
+            label: "Desasignar de Aula",
+            icon: <UserMinus size={20} />,
+            onClick: handleOpenBulkUnassign,
+          },
           {
             label: "Descargar Plantilla",
             icon: <FileSpreadsheet size={20} />,
@@ -477,6 +635,20 @@ export default function Students() {
           onClose={() => setShowResultsModal(false)}
         />
       )}
+
+      <BulkAssignToAulaModal
+        isOpen={showBulkAssignModal}
+        onClose={() => setShowBulkAssignModal(false)}
+        aulas={aulas}
+        onAssign={handleBulkAssignToAula}
+      />
+
+      <BulkUnassignFromAulaModal
+        isOpen={showBulkUnassignModal}
+        onClose={() => setShowBulkUnassignModal(false)}
+        aulas={aulas}
+        onUnassign={handleBulkUnassignFromAula}
+      />
     </>
   );
 }
